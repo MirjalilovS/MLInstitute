@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader
 from torchvision import datasets
 from torchvision.transforms import transforms
 import matplotlib.pyplot as plt
+import torch.nn.functional as F
 
 # Download and preprocess the MNIST training dataset
 training_data = datasets.MNIST(
@@ -59,27 +60,36 @@ print(f"Using {device} device")
 
 
 # Define model
-class NeuralNetwork(nn.Module):
+class SimpleCNN(nn.Module):
     def __init__(self):
         super().__init__()
-        self.flatten = nn.Flatten()
-        self.linear_relu_stack = nn.Sequential(
-            nn.Linear(28*28, 512),
-            nn.ReLU(),
-            nn.Linear(512, 512),
-            nn.ReLU(),
-            nn.Linear(512, 10)
-        )
+        # Convolutional feature extractor
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)  # preserves 28×28
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1) # preserves 28×28
+        self.pool  = nn.MaxPool2d(2, 2)                          # down to 14×14
+        #needs to be fixed, calling dropout on 2d tensors will error out in future versions
+        self.dropout = nn.Dropout2d(0.25)
+        
+        # Classifier head
+        self.fc1   = nn.Linear(64 * 14 * 14, 128)
+        self.fc2   = nn.Linear(128, 10)
 
     def forward(self, x):
-        x = self.flatten(x)
-        logits = self.linear_relu_stack(x)
-        return logits
-model = NeuralNetwork().to(device)
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = self.pool(x)
+        x = self.dropout(x)
+        x = x.view(x.size(0), -1)     # flatten
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.fc2(x)
+        return x
+    
+model = SimpleCNN().to(device)
 print(model)
 
 loss_fn = nn.CrossEntropyLoss()
-optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=0.9)
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
 def train(dataloader, model, loss_fn, optimizer):
     size = len(dataloader.dataset)
@@ -115,10 +125,12 @@ def test(dataloader, model, loss_fn):
     correct /= size
     print(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} \n")
 
-epochs = 20
+epochs = 5
 for t in range(epochs):
     print(f"Epoch {t+1}\n-------------------------------")
     train(train_dataloader, model, loss_fn, optimizer)
     test(test_dataloader, model, loss_fn)
 print("Done!")
 
+# After training loop finishes
+torch.save(model.state_dict(), "mnist_cnn.pth")
