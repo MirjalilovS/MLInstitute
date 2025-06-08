@@ -49,43 +49,20 @@ model = load_model()
 # ───────────────────────────────────────────
 @st.cache_resource(show_spinner=False)
 def get_db_conn():
-    """
-    Looks for PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE
-    – falls back to sensible defaults (localhost).
-    """
-    try:
-        conn = psycopg2.connect(
-            host=os.getenv("PGHOST", "localhost"),
-            port=int(os.getenv("PGPORT", "5432")),
-            user=os.getenv("PGUSER", "mnist_user"),
-            password=os.getenv("PGPASSWORD", "mnist_pw"),
-            dbname=os.getenv("PGDATABASE", "mnist_app")
-        )
-        conn.autocommit = True
-        return conn
-    except psycopg2.OperationalError as e:
-        st.warning("Could not connect to PostgreSQL – logging disabled.\n\n"
-                   f"{e.pgerror or e}")
-        return None
+    return psycopg2.connect(
+        host=os.getenv("PGHOST", "localhost"),
+        port=os.getenv("PGPORT", 5432),
+        user=os.getenv("PGUSER", "mnist_user"),
+        password=os.getenv("PGPASSWORD", "mnist_pw"),
+        dbname=os.getenv("PGDATABASE", "mnist_app"),
+    )
 
 def log_prediction(pred: int, conf: float, true_digit: int | None):
     conn = get_db_conn()
-    if conn is None:
-        return
-    with conn.cursor() as cur:
+    with conn, conn.cursor() as cur:
         cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS predictions (
-                id SERIAL PRIMARY KEY,
-                ts TIMESTAMPTZ DEFAULT NOW(), 
-                confidence FLOAT,
-                true_digit INT
-            );
-            """
-        )
-        cur.execute(
-            "INSERT INTO predictions (predicted, confidence, true_digit)"
-            " VALUES (%s, %s, %s);",
+            "INSERT INTO predictions (predicted, confidence, true_digit) "
+            "VALUES (%s,%s,%s)",
             (pred, conf, true_digit)
         )
 
