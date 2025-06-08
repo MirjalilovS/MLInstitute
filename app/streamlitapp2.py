@@ -58,7 +58,7 @@ def load_model() -> nn.Module:
 
 model = load_model()
 
-# ───────────────────── 2. PostgreSQL Utility Functions ──────────────────────
+# ───────────────────── 2. PostgreSQL Setup ──────────────────────
 def _pg_kwargs():
     # Connection parameters for our PostgreSQL database
     return dict(
@@ -78,7 +78,7 @@ def pg_conn():
         yield conn
     finally:
         conn.close()
-
+#Got issue with prediction table not existing and this fixed it
 def init_schema() -> None:
     """Create predictions table if it doesn't exist yet."""
     with pg_conn() as conn, conn.cursor() as cur:
@@ -93,8 +93,6 @@ def init_schema() -> None:
             );
             """
         )
-
-# Call once at startup
 init_schema()
 
 def log_prediction(pred: int, conf: float, true_digit: int | None) -> None:
@@ -144,7 +142,7 @@ canvas = st_canvas(
     stroke_width=10,
     stroke_color="#FFFFFF",
     background_color="#000000",
-    height=280,
+    height=280, #chosen  to reduce the size to 28x28 tensor
     width=280,
     drawing_mode="freedraw",
     key=f"canvas_{st.session_state.canvas_key}",
@@ -167,7 +165,7 @@ if submit_clicked:
     # Make a prediction using our CNN model
     probs = torch.softmax(model(tensor)[0], dim=0)
     st.session_state.prediction = int(probs.argmax().item())
-    st.session_state.confidence = float(probs.max().item())
+    st.session_state.confidence = float(probs.max().item()*100)
 
 # Show the prediction result if available
 if st.session_state.prediction is not None:
@@ -178,8 +176,11 @@ if st.session_state.prediction is not None:
 
     # Button to log the prediction with an optional true digit
     if st.button("Submit True Digit"):
-        log_prediction(pred, conf, true_digit if true_digit is not None else None)
-
+        log_prediction(
+        st.session_state.prediction,         
+        st.session_state.confidence,
+        int(true_digit) if true_digit is not None else None,
+    )
         # clear per-prediction state
         st.session_state.update(
             prediction=None,
