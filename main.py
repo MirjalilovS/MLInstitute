@@ -114,16 +114,25 @@ def test(dataloader, model, loss_fn):
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
     model.eval()
-    test_loss, correct = 0, 0
+    test_loss, accuracy = 0, 0
+    total_confidence = 0.0
     with torch.no_grad():
         for X, y in dataloader:
             X, y = X.to(device), y.to(device)
             pred = model(X)
             test_loss += loss_fn(pred, y).item()
-            correct += (pred.argmax(1) == y).type(torch.float).sum().item()
+            accuracy += (pred.argmax(1) == y).type(torch.float).sum().item()
+
+            probs, preds = torch.softmax(pred, dim=1).max(dim=1)
+            accuracy    += (preds == y).sum().item()
+            total_confidence += probs.sum().item()
     test_loss /= num_batches
-    correct /= size
-    print(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} \n")
+    accuracy /= size
+    total_confidence /= size
+    print(f"Test Error: \n"
+          f"  Accuracy: {100*accuracy:>0.1f}%, "
+          f"Avg loss: {test_loss:>8f}, "
+          f"Avg confidence: {total_confidence:.2%}\n")
 
 epochs = 5
 for t in range(epochs):
