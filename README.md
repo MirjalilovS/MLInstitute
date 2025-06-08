@@ -19,18 +19,3 @@ Draw a digit in your browser, press **Submit**, and a Convolutional Neural Netwo
 | **Deployment** | Hetzner Cloud CX11 | Ubuntu 22.04, firewall open only on 22 and 8501 |
 
 ---
-
-## Quick Start (Docker)
-
-```bash
-git clone https://github.com/<your-fork>/mnist-end2end.git
-cd mnist-end2end
-
-# 1.  (Optional) adjust credentials
-cp .env.example .env              # defaults: mnist_user / mnist_pw
-
-# 2.  Build & start
-docker compose up -d --build
-
-# 3.  Open the app
-open http://localhost:8501
