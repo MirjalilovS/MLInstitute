@@ -1,16 +1,15 @@
 # streamlit_app.py
 """
-MNIST digit recogniser – pure psycopg2 version
-✓ fixes recursive-connection error
-✓ instant table refresh after logging
-✓ disables watchdog via env var (avoids PyTorch '__path__._path' crash)
+MNIST Digit Recogniser
+A simple app that took me way too long using psycopg2 that lets you test out a CNN on handwritten digits.
+Note: This version fixes the recursive-connection bug and disables the watchdog to avoid PyTorch issues.
 """
 
-# ── IMMUTABLE CONFIG (must precede Streamlit import) ──────────────
+# ── PRE-SET ENVIRONMENT (Don’t change the order) ──────────────
 import os
-os.environ["STREAMLIT_SERVER_FILEWATCHERTYPE"] = "none"   # <── change ①
+os.environ["STREAMLIT_SERVER_FILEWATCHERTYPE"] = "none"   # Disables filewatcher to prevent crashes
 
-# ─────────────────────────── imports ──────────────────────────────
+# ─────────────────────────── Imports ──────────────────────────────
 import warnings
 from contextlib import contextmanager
 from datetime import datetime
@@ -18,19 +17,19 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import psycopg2
-import streamlit as st                         # <── Streamlit imported after env var
+import streamlit as st  # Importing Streamlit after setting environment variables
 from PIL import Image
 from streamlit_drawable_canvas import st_canvas
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# silence pandas/SQLAlchemy warning
+# Hiding some warnings from pandas/SQLAlchemy we don't care about
 warnings.filterwarnings("ignore", category=UserWarning, module="pandas.io.sql")
 
-st.set_page_config(page_title="MNIST Digit Recogniser", page_icon="✏️")  # <── ② line removed
+st.set_page_config(page_title="MNIST Digit Recogniser", page_icon="✏️")
 
-# ────────────────────── 1. CNN model (cached) ─────────────────────
+# ────────────────────── 1. Define the CNN model ─────────────────────
 class SimpleCNN(nn.Module):
     def __init__(self):
         super().__init__()
@@ -51,6 +50,7 @@ class SimpleCNN(nn.Module):
 
 @st.cache_resource(show_spinner=False)
 def load_model() -> nn.Module:
+    # Load the pre-trained CNN and set it to evaluation mode
     m = SimpleCNN()
     m.load_state_dict(torch.load("mnist_cnn.pth", map_location="cpu"))
     m.eval()
@@ -58,8 +58,9 @@ def load_model() -> nn.Module:
 
 model = load_model()
 
-# ───────────────────── 2. PostgreSQL helpers ──────────────────────
+# ───────────────────── 2. PostgreSQL Utility Functions ──────────────────────
 def _pg_kwargs():
+    # Connection parameters for our PostgreSQL database
     return dict(
         host=os.getenv("PGHOST", "localhost"),
         port=os.getenv("PGPORT", 5432),
@@ -70,6 +71,7 @@ def _pg_kwargs():
 
 @contextmanager
 def pg_conn():
+    # Using a context manager to handle our database connection neatly
     conn = psycopg2.connect(**_pg_kwargs())
     conn.autocommit = True
     try:
@@ -78,6 +80,7 @@ def pg_conn():
         conn.close()
 
 def log_prediction(pred: int, conf: float, true_digit: int | None) -> None:
+    # Log the prediction details into the database
     with pg_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -89,6 +92,7 @@ def log_prediction(pred: int, conf: float, true_digit: int | None) -> None:
 
 @st.cache_data(show_spinner=False)
 def fetch_recent(limit: int = 20) -> pd.DataFrame:
+    # Retrieve the most recent predictions from our database
     with pg_conn() as conn:
         return pd.read_sql_query(
             f"""
@@ -100,13 +104,15 @@ def fetch_recent(limit: int = 20) -> pd.DataFrame:
             conn,
         )
 
-# ────────────────────────── 3. UI  ────────────────────────────────
-st.title("✏️ MNIST Digit Recogniser")
+# ────────────────────────── 3. Build the UI ────────────────────────────────
+st.title("MNIST Digit Recogniser")
 
+# Initialize session state variables if they don't exist
 st.session_state.setdefault("prediction", None)
 st.session_state.setdefault("confidence", None)
 st.session_state.setdefault("canvas_key", 0)
 
+# Set up columns for button and input elements
 c1, _, c3 = st.columns([1, 0.2, 2])
 with c1:
     submit_clicked = st.button("Submit")
@@ -115,6 +121,7 @@ with c3:
         "True digit (optional)", min_value=0, max_value=9, step=1, format="%d"
     )
 
+# Create a drawable canvas for users to sketch their digit
 canvas = st_canvas(
     stroke_width=10,
     stroke_color="#FFFFFF",
@@ -127,9 +134,10 @@ canvas = st_canvas(
 
 if submit_clicked:
     if canvas.image_data is None:
-        st.error("Draw a digit first!")
+        st.error("Please draw something first!")
         st.stop()
 
+    # Process the drawn image: convert, resize, and normalize it
     img = (
         Image.fromarray(canvas.image_data.astype("uint8"))
         .convert("L")
@@ -138,30 +146,35 @@ if submit_clicked:
     arr = (np.array(img, dtype=np.float32) / 255.0 - 0.1307) / 0.3081
     tensor = torch.from_numpy(arr).unsqueeze(0).unsqueeze(0)
 
+    # Make a prediction using our CNN model
     probs = torch.softmax(model(tensor)[0], dim=0)
     st.session_state.prediction = int(probs.argmax().item())
     st.session_state.confidence = float(probs.max().item())
 
+# Show the prediction result if available
 if st.session_state.prediction is not None:
     st.success(
         f"**Prediction:** {st.session_state.prediction}&nbsp;&nbsp;"
         f"**Confidence:** {st.session_state.confidence:.2%}"
     )
 
+    # Button to log the prediction with an optional true digit
     if st.button("Submit True Digit"):
         log_prediction(
             st.session_state.prediction,
             st.session_state.confidence,
             int(true_digit) if true_digit is not None else None,
         )
+        # Reset session state for a new prediction
         st.session_state.prediction = None
         st.session_state.confidence = None
         st.session_state.canvas_key += 1
         st.experimental_rerun()
 
+# Display a table of recent predictions from the database
 df = fetch_recent()
 if df.empty:
-    st.info("No predictions logged yet – draw a digit and hit **Submit**.")
+    st.info("No predictions logged yet – try drawing a digit and hitting **Submit**.")
 else:
     st.subheader("Recent predictions")
     st.dataframe(df, use_container_width=True)
