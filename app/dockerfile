@@ -1,0 +1,20 @@
+# app/Dockerfile
+FROM python:3.12-slim
+
+# Disable Streamlit watcher inside the container, too
+ENV STREAMLIT_SERVER_FILEWATCHERTYPE="none"
+
+WORKDIR /app
+
+# Copy & install only Python deps
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the rest of your app
+COPY . .
+
+# Expose Streamlit’s default port
+EXPOSE 8501
+
+ENTRYPOINT ["streamlit", "run", "streamlitapp2.py", \
+    "--server.port=8501", "--server.address=0.0.0.0"]

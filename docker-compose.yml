@@ -1,0 +1,26 @@
+version: "3.8"
+
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: mnist_user
+      POSTGRES_PASSWORD: mnist_pw
+      POSTGRES_DB: mnist_app
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  web:
+    build: ./app
+    ports:
+      - "8501:8501"
+    env_file:  # load .env for PGHOST/PGUSER/etc if you like
+      - .env
+    environment:
+      # override PGHOST to point at the DB service
+      PGHOST: db
+    depends_on:
+      - db
+
+volumes:
+  pgdata:
