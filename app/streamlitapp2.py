@@ -79,6 +79,24 @@ def pg_conn():
     finally:
         conn.close()
 
+def init_schema() -> None:
+    """Create predictions table if it doesn't exist yet."""
+    with pg_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS predictions (
+              id         SERIAL PRIMARY KEY,
+              ts         TIMESTAMPTZ DEFAULT NOW(),
+              predicted  INT,
+              confidence FLOAT,
+              true_digit INT
+            );
+            """
+        )
+
+# Call once at startup
+init_schema()
+
 def log_prediction(pred: int, conf: float, true_digit: int | None) -> None:
     # Log the prediction details into the database
     with pg_conn() as conn, conn.cursor() as cur:
@@ -160,16 +178,15 @@ if st.session_state.prediction is not None:
 
     # Button to log the prediction with an optional true digit
     if st.button("Submit True Digit"):
-        log_prediction(
-            st.session_state.prediction,
-            st.session_state.confidence,
-            int(true_digit) if true_digit is not None else None,
+        log_prediction(pred, conf, true_digit if true_digit is not None else None)
+
+        # clear per-prediction state
+        st.session_state.update(
+            prediction=None,
+            confidence=None,
+            canvas_key=st.session_state.canvas_key + 1,  # forces new blank canvas
         )
-        # Reset session state for a new prediction
-        st.session_state.prediction = None
-        st.session_state.confidence = None
-        st.session_state.canvas_key += 1
-        st.experimental_rerun()
+
 
 # Display a table of recent predictions from the database
 df = fetch_recent()
