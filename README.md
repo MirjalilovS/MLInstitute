@@ -3,7 +3,7 @@
 Draw a digit in your browser, press **Submit**, and a Convolutional Neural Network predicts the digit and logs the result in PostgreSQL.
 
 **Live demo → <http://195.201.231.19:8501/>**  
-(running on a Hetzner CX11 VPS)
+(running on a Hetzner CAX11 VPS)
 
 ---
 
