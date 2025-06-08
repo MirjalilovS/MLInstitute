@@ -165,7 +165,7 @@ if submit_clicked:
     # Make a prediction using our CNN model
     probs = torch.softmax(model(tensor)[0], dim=0)
     st.session_state.prediction = int(probs.argmax().item())
-    st.session_state.confidence = float(probs.max().item()*100)
+    st.session_state.confidence = float(probs.max().item())
 
 # Show the prediction result if available
 if st.session_state.prediction is not None:
