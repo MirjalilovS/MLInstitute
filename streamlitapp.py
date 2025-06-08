@@ -1,39 +1,175 @@
-import pandas as pd
-from PIL import Image
+# streamlit_app.py
+import os
+import numpy as np
+import psycopg2
 import streamlit as st
+from PIL import Image
 from streamlit_drawable_canvas import st_canvas
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from datetime import datetime
 
-# Specify canvas parameters in application
-drawing_mode = "freedraw"
+# ───────────────────────────────────────────
+# 1.  Model definition & cached loader
+# ───────────────────────────────────────────
+class SimpleCNN(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1   = nn.Conv2d(1, 32, 3, padding=1)
+        self.conv2   = nn.Conv2d(32, 64, 3, padding=1)
+        self.pool    = nn.MaxPool2d(2, 2)
+        self.drop_c  = nn.Dropout2d(0.25)
+        self.drop_f  = nn.Dropout(0.5)
+        self.fc1     = nn.Linear(64 * 14 * 14, 128)
+        self.fc2     = nn.Linear(128, 10)
 
-stroke_width = 4
-stroke_color = "#000000"  # Black stroke color
-bg_color = "#FFFFFF"  # White background color
-realtime_update = True
+    def forward(self, x):
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = self.pool(x)
+        x = self.drop_c(x)
+        x = torch.flatten(x, 1)
+        x = F.relu(self.fc1(x))
+        x = self.drop_f(x)
+        return self.fc2(x)
 
-    
+@st.cache_resource(show_spinner=False)
+def load_model():
+    model = SimpleCNN()
+    state = torch.load("mnist_cnn.pth", map_location="cpu")
+    model.load_state_dict(state)
+    model.eval()
+    return model
 
-# Create a canvas component
-canvas_result = st_canvas(
-    fill_color="rgba(255, 165, 0, 0.3)",  # Fixed fill color with some opacity
-    stroke_width=4,
-    stroke_color= "#000000",
-    background_color="#FFFFFF",
-    background_image=None,
-    update_streamlit=True,
+model = load_model()
+
+# ───────────────────────────────────────────
+# 2.  PostgreSQL connection (cached)
+# ───────────────────────────────────────────
+@st.cache_resource(show_spinner=False)
+def get_db_conn():
+    """
+    Looks for PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE
+    – falls back to sensible defaults (localhost).
+    """
+    try:
+        conn = psycopg2.connect(
+            host=os.getenv("PGHOST", "localhost"),
+            port=int(os.getenv("PGPORT", "5432")),
+            user=os.getenv("PGUSER", "mnist_user"),
+            password=os.getenv("PGPASSWORD", "mnist_pw"),
+            dbname=os.getenv("PGDATABASE", "mnist_app")
+        )
+        conn.autocommit = True
+        return conn
+    except psycopg2.OperationalError as e:
+        st.warning("Could not connect to PostgreSQL – logging disabled.\n\n"
+                   f"{e.pgerror or e}")
+        return None
+
+def log_prediction(pred: int, conf: float, true_digit: int | None):
+    conn = get_db_conn()
+    if conn is None:
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS predictions (
+                id SERIAL PRIMARY KEY,
+                ts TIMESTAMPTZ DEFAULT NOW(), 
+                confidence FLOAT,
+                true_digit INT
+            );
+            """
+        )
+        cur.execute(
+            "INSERT INTO predictions (predicted, confidence, true_digit)"
+            " VALUES (%s, %s, %s);",
+            (pred, conf, true_digit)
+        )
+
+# ───────────────────────────────────────────
+# 3.  Streamlit UI
+# ───────────────────────────────────────────
+st.title("MNIST Digit Recognizer")
+
+if "canvas_key" not in st.session_state:
+    st.session_state.canvas_key = 0
+if "prediction" not in st.session_state:
+    st.session_state.prediction = None
+    st.session_state.confidence = None
+
+# Buttons
+col_btn1, col_btn2, col_true = st.columns([1, 1, 2])
+with col_btn1:
+    submit_clicked = st.button("Submit")
+with col_btn2:
+    reset_clicked = st.button("Reset")
+with col_true:
+    true_digit = st.number_input(
+        "True digit (0-9, optional)", min_value=0, max_value=9, step=1
+    )
+
+# Drawing canvas (white strokes on black bg → matches MNIST polarity)
+canvas = st_canvas(
+    stroke_width=10,
+    stroke_color="#FFFFFF",
+    background_color="#000000",
     height=280,
     width=280,
     drawing_mode="freedraw",
-    key="canvas",
+    key=f"canvas_{st.session_state.canvas_key}"
 )
-st.button("Submit", key="submit_button")
-st.button("Reset", key="reset_button")
 
-# Do something interesting with the image data and paths
-if canvas_result.image_data is not None:
-    st.image(canvas_result.image_data)
-if canvas_result.json_data is not None:
-    objects = pd.json_normalize(canvas_result.json_data["objects"]) # need to convert obj to str because PyArrow
-    for col in objects.select_dtypes(include=['object']).columns:
-        objects[col] = objects[col].astype("str")
-    st.dataframe(objects)
+# Reset clears canvas + results
+if reset_clicked:
+    st.session_state.canvas_key += 1
+    st.session_state.prediction = None
+    st.session_state.confidence = None
+    st.stop()
+
+# Submit → preprocess, infer, log
+if submit_clicked:
+    if canvas.image_data is None:
+        st.error("Draw a digit first!")
+        st.stop()
+
+    # ── 3.1 preprocess (28×28, [0,1], normalize) ──
+    img = Image.fromarray(canvas.image_data.astype("uint8")).convert("L").resize((28, 28))
+    arr = np.array(img, dtype=np.float32) / 255.0                 # 0 (bg) .. 1 (stroke)
+    arr = (arr - 0.1307) / 0.3081                                 # match training stats
+    tensor = torch.from_numpy(arr).unsqueeze(0).unsqueeze(0)      # [1,1,28,28]
+
+    # ── 3.2 inference ──
+    logits = model(tensor)
+    probs  = F.softmax(logits, dim=1)[0]
+    pred   = int(probs.argmax().item())
+    conf   = float(probs.max().item())
+
+    # ── 3.3 store in session & DB ──
+    st.session_state.prediction = pred
+    st.session_state.confidence = conf
+    log_prediction(pred, conf, true_digit if true_digit is not None else None)
+
+# ───────────────────────────────────────────
+# 4.  Display result
+# ───────────────────────────────────────────
+if st.session_state.prediction is not None:
+    st.success(
+        f"**Prediction:** {st.session_state.prediction}   "
+        f"**Confidence:** {st.session_state.confidence:.2%}"
+    )
+conn = get_db_conn()
+if conn:
+    import pandas as pd
+    try:
+        df = pd.read_sql(
+            "SELECT ts, predicted, confidence, true_digit "
+            "FROM predictions ORDER BY ts DESC LIMIT 20;",
+            conn
+        )
+        st.subheader("Recent predictions")
+        st.dataframe(df)
+    except Exception as e:
+        st.warning(f"Could not fetch table:\n{e}")
