@@ -182,12 +182,13 @@ if st.session_state.prediction is not None:
         int(true_digit) if true_digit is not None else None,
     )
         # clear per-prediction state
+        fetch_recent.clear()   
         st.session_state.update(
             prediction=None,
             confidence=None,
             canvas_key=st.session_state.canvas_key + 1,  # forces new blank canvas
         )
-
+        st.rerun()
 
 # Display a table of recent predictions from the database
 df = fetch_recent()
